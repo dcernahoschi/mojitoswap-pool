@@ -444,7 +444,7 @@ fn scenario_5() {
     let mut context = Context::new(Decimal::zero(), Decimal::one());
     let account = context.new_account_with_moj_and_usdt(dec!("30000"), dec!("30000"));
     context.add_position(&account, dec!("10000"), dec!("10000"), -1000, 1000);
-    let _swap1_receipt = context.swap_moj_for_usdt(&account, dec!("10512.684683767608857909"), dec!("9534.995457587810216561"));
+    let _swap1_receipt = context.swap_moj_for_usdt(&account, dec!("10512.684683767608857909"), dec!("9999.999999999957144202"));
 }
 
 /**
@@ -657,6 +657,45 @@ fn scenario_14() {
     context.add_position(&account, dec!("10000"), Decimal::zero(), 200, 300);
     context.swap_usdt_for_moj(&account, dec!("20000"), dec!("19647.863604192115415544"));
     context.swap_moj_for_usdt(&account, dec!("19647.863604192115415544"), dec!("19999.999999999994361019"));
+}
+
+/**
+ * Single range swap. Liquidity limit.
+ * 
+ * Given a pool with fee=0, sqrt_price=1 and a position=[10000 MOJ + 10000 USDT, -1000, 1000]
+ * 
+ * Test that if we try to swap 11000 MOJ, we can swap only ~10512 MOJ right to the end of the range(tick -1000), that the expected amount of USDT is returned (~10000 USDT) and the reminder ~ 488MOJ are returned back, as we have no more liquidity to swap it.
+ */
+#[test]
+fn scenario_15() {
+    let mut context = Context::new(Decimal::zero(), Decimal::one());
+    let account = context.new_account_with_moj_and_usdt(dec!("30000"), dec!("30000"));
+    context.add_position(&account, dec!("10000"), dec!("10000"), -1000, 1000);
+    let _swap1_receipt = context.swap_moj_for_usdt(&account, dec!("11000"), dec!("9999.999999999957144202"));
+}
+
+/**
+ * Collect fees.
+ * 
+ * Given:
+ * - pool with fee=0.01, sqrt_price=1
+ * - position1=[10000 MOJ, 10000 USDT, -1000, 1000]
+ * - position2=[10000 MOJ, 10000 USDT, -1000, 1000]
+ * 
+ * If: there is a 5000 MOJ swap in range [-1000, 1000]
+ * 
+ * Then: position 1 and position 2 split equally the 50 MOJ fee
+ */
+#[test]
+fn scenario_16() {
+    let mut context = Context::new(dec!("0.01"), Decimal::one());
+    let account1 = context.new_account_with_moj_and_usdt(dec!("100000"), dec!("100000"));
+    let account2 = context.new_account_with_moj_and_usdt(dec!("100000"), dec!("100000"));
+    context.add_position(&account1, dec!("10000"), dec!("10000"), -1000, 1000);
+    context.add_position(&account2, dec!("10000"), dec!("10000"), -1000, 1000);
+    context.swap_moj_for_usdt(&account1, dec!("5000"), dec!("4890.96541696510667305"));
+    context.collect_fees(&account1, dec!("24.999999999999999999"), Decimal::zero());
+    context.collect_fees(&account2, dec!("24.999999999999999999"), Decimal::zero());
 }
 
 // To be continued...

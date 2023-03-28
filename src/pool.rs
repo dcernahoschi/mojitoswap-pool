@@ -630,7 +630,6 @@ mod pool_blueprint {
                     total_fee_amount += fee_amount;
                     self.sqrt_price = new_sqrt_price;
                     
-
                     // update global fees
                     let liq_unit_fee = fee_amount / self.live_liq;
                     if is_token0 {
