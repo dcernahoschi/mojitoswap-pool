@@ -56,30 +56,32 @@ impl Context {
             .new_token_fixed(usdt_token_info, dec!("10000000"))
             .new_token_fixed(moj_token_info, dec!("10000000"))
             .new_badge_fixed(BTreeMap::new(), Decimal::one())
-            .call_method(admin.addr, "deposit_batch", args!(ManifestExpression::EntireWorktop))
+            .call_method(admin.addr, "deposit_batch", manifest_args!(ManifestExpression::EntireWorktop))
             .build();
 
         let admin_res_receipt = execute_manif(&mut runner, admin_res_manif, vec![&pub_key]);
 
-        let usdt_addr: ResourceAddress = admin_res_receipt.new_resource_addresses()[0];
-        let moj_addr: ResourceAddress = admin_res_receipt.new_resource_addresses()[1];
-        let admin_badge_addr: ResourceAddress = admin_res_receipt.new_resource_addresses()[2];
+        let result = admin_res_receipt.expect_commit_success();
+
+        let usdt_addr: ResourceAddress = result.new_resource_addresses()[0];
+        let moj_addr: ResourceAddress = result.new_resource_addresses()[1];
+        let admin_badge_addr: ResourceAddress = result.new_resource_addresses()[2];
 
         let new_pool_manif = ManifestBuilder::new()
             .call_function(
                 package_addr,
                 "Pool",
                 "new",
-                args![moj_addr, usdt_addr, fee, sqrt_price, admin_badge_addr],
+                manifest_args![moj_addr, usdt_addr, fee, sqrt_price, admin_badge_addr],
             )
-            .call_method(admin.addr, "deposit_batch", args!(ManifestExpression::EntireWorktop))
+            .call_method(admin.addr, "deposit_batch", manifest_args!(ManifestExpression::EntireWorktop))
             .build();
         let new_pool_receipt = runner.execute_manifest_ignoring_fee(new_pool_manif, vec![NonFungibleGlobalId::from_public_key(&pub_key)]);
         println!("{:?}\n", new_pool_receipt);
-        new_pool_receipt.expect_commit_success();
+        let result = new_pool_receipt.expect_commit_success();
 
-        let pool_addr: ComponentAddress = new_pool_receipt.new_component_addresses()[0];
-        let pos_nft_badge_addr: ResourceAddress = new_pool_receipt.new_resource_addresses()[1];
+        let pool_addr: ComponentAddress = result.new_component_addresses()[0];
+        let pos_nft_badge_addr: ResourceAddress = result.new_resource_addresses()[1];
 
         Self {
             runner,
@@ -99,9 +101,9 @@ impl Context {
         let (account_pub_key, _account_priv_key, account_addr) = self.runner.new_allocated_account();
 
         let account_amount_manif = ManifestBuilder::new()
-            .withdraw_from_account_by_amount(self.admin.addr, moj_amount, self.moj_addr)
-            .withdraw_from_account_by_amount(self.admin.addr, usdt_amount, self.usdt_addr)
-            .call_method(account_addr, "deposit_batch", args!(ManifestExpression::EntireWorktop))
+            .withdraw_from_account(self.admin.addr, self.moj_addr, moj_amount)
+            .withdraw_from_account(self.admin.addr, self.usdt_addr, usdt_amount)
+            .call_method(account_addr, "deposit_batch", manifest_args!(ManifestExpression::EntireWorktop))
             .build();
 
         execute_manif(&mut self.runner, account_amount_manif, vec![&self.admin.pub_key]);
@@ -124,18 +126,18 @@ impl Context {
         high_tick: i32,
     ) -> TransactionReceipt {
         let add_pos_manif = ManifestBuilder::new()
-            .withdraw_from_account_by_amount(account.addr, moj_amount, self.moj_addr)
+            .withdraw_from_account(account.addr, self.moj_addr, moj_amount)
             .take_from_worktop(self.moj_addr, |builder1, moj_bucket| {
                 builder1
-                    .withdraw_from_account_by_amount(account.addr, usdt_amount, self.usdt_addr)
+                    .withdraw_from_account(account.addr, self.usdt_addr, usdt_amount)
                     .take_from_worktop(self.usdt_addr, |builder2, usdt_bucket| {
-                        builder2.call_method(self.pool_addr, "add_position", args![moj_bucket, usdt_bucket, low_tick, high_tick])
+                        builder2.call_method(self.pool_addr, "add_position", manifest_args![moj_bucket, usdt_bucket, low_tick, high_tick])
                     })
             })
             .assert_worktop_contains_by_amount(Decimal::zero(), self.moj_addr)
             .assert_worktop_contains_by_amount(Decimal::zero(), self.usdt_addr)
             .assert_worktop_contains_by_amount(Decimal::one(), self.position_nft_addr)
-            .call_method(account.addr, "deposit_batch", args!(ManifestExpression::EntireWorktop))
+            .call_method(account.addr, "deposit_batch", manifest_args!(ManifestExpression::EntireWorktop))
             .build();
 
         let add_pos_receipt = self
@@ -154,21 +156,21 @@ impl Context {
      */
     pub fn add_liq(&mut self, account: &Account, usdt_amount: Decimal, moj_amount: Decimal) -> TransactionReceipt {
         let add_liq_manif = ManifestBuilder::new()
-            .withdraw_from_account_by_amount(account.addr, moj_amount, self.moj_addr)
+            .withdraw_from_account(account.addr, self.moj_addr, moj_amount)
             .take_from_worktop(self.moj_addr, |builder1, moj_bucket| {
                 builder1
-                    .withdraw_from_account_by_amount(account.addr, usdt_amount, self.usdt_addr)
+                    .withdraw_from_account(account.addr, self.usdt_addr, usdt_amount)
                     .take_from_worktop(self.usdt_addr, |builder2, usdt_bucket| {
                         builder2
                             .create_proof_from_account(account.addr, self.position_nft_addr)
                             .create_proof_from_auth_zone(self.position_nft_addr, |builder3, proof| {
-                                builder3.call_method(self.pool_addr, "add_liq", args![moj_bucket, usdt_bucket, proof])
+                                builder3.call_method(self.pool_addr, "add_liq", manifest_args![moj_bucket, usdt_bucket, proof])
                             })
                     })
             })
             .assert_worktop_contains_by_amount(Decimal::zero(), self.moj_addr)
             .assert_worktop_contains_by_amount(Decimal::zero(), self.usdt_addr)
-            .call_method(account.addr, "deposit_batch", args!(ManifestExpression::EntireWorktop))
+            .call_method(account.addr, "deposit_batch", manifest_args!(ManifestExpression::EntireWorktop))
             .build();
 
         let add_liq_receipt = self
@@ -187,7 +189,7 @@ impl Context {
         let add_liq_manif = ManifestBuilder::new()
             .create_proof_from_account(account.addr, self.position_nft_addr)
             .create_proof_from_auth_zone(self.position_nft_addr, |builder, proof| {
-                builder.call_method(self.pool_addr, "add_accumulated_fees_to_liq", args![proof])
+                builder.call_method(self.pool_addr, "add_accumulated_fees_to_liq", manifest_args![proof])
             })
             .build();
 
@@ -207,11 +209,11 @@ impl Context {
         let remove_liq_manif = ManifestBuilder::new()
             .create_proof_from_account(account.addr, self.position_nft_addr)
             .create_proof_from_auth_zone(self.position_nft_addr, |builder1, proof| {
-                builder1.call_method(self.pool_addr, "remove_pos", args![proof])
+                builder1.call_method(self.pool_addr, "remove_pos", manifest_args![proof])
             })
             .assert_worktop_contains_by_amount(expected_moj_amount, self.moj_addr)
             .assert_worktop_contains_by_amount(expected_usdt_amount, self.usdt_addr)
-            .call_method(account.addr, "deposit_batch", args!(ManifestExpression::EntireWorktop))
+            .call_method(account.addr, "deposit_batch", manifest_args!(ManifestExpression::EntireWorktop))
             .build();
 
         let remove_liq_receipt = self
@@ -230,11 +232,11 @@ impl Context {
         let collect_fees_manif = ManifestBuilder::new()
             .create_proof_from_account(account.addr, self.position_nft_addr)
             .create_proof_from_auth_zone(self.position_nft_addr, |builder1, proof| {
-                builder1.call_method(self.pool_addr, "collect_fees", args![proof])
+                builder1.call_method(self.pool_addr, "collect_fees", manifest_args![proof])
             })
             .assert_worktop_contains_by_amount(expected_moj_amount, self.moj_addr)
             .assert_worktop_contains_by_amount(expected_usdt_amount, self.usdt_addr)
-            .call_method(account.addr, "deposit_batch", args!(ManifestExpression::EntireWorktop))
+            .call_method(account.addr, "deposit_batch", manifest_args!(ManifestExpression::EntireWorktop))
             .build();
 
         let remove_liq_receipt = self
@@ -271,13 +273,13 @@ impl Context {
         expected_token_amount: Decimal,
     ) -> TransactionReceipt {
         let swap_manif = ManifestBuilder::new()
-            .withdraw_from_account_by_amount(account.addr, token_amount, token_addr)
+            .withdraw_from_account(account.addr, token_addr, token_amount)
             .take_from_worktop_by_amount(token_amount, token_addr, |builder1, token_bucket| {
-                builder1.call_method(self.pool_addr, "swap", args![token_bucket])
+                builder1.call_method(self.pool_addr, "swap", manifest_args![token_bucket])
             })
             .assert_worktop_contains_by_amount(Decimal::zero(), token_addr)
             .assert_worktop_contains_by_amount(expected_token_amount, expected_token_addr)
-            .call_method(account.addr, "deposit_batch", args!(ManifestExpression::EntireWorktop))
+            .call_method(account.addr, "deposit_batch", manifest_args!(ManifestExpression::EntireWorktop))
             .build();
         let swap_receipt = self
             .runner
@@ -444,7 +446,7 @@ fn scenario_5() {
     let mut context = Context::new(Decimal::zero(), Decimal::one());
     let account = context.new_account_with_moj_and_usdt(dec!("30000"), dec!("30000"));
     context.add_position(&account, dec!("10000"), dec!("10000"), -1000, 1000);
-    let _swap1_receipt = context.swap_moj_for_usdt(&account, dec!("10512.684683767608857909"), dec!("9534.995457587810216561"));
+    let _swap1_receipt = context.swap_moj_for_usdt(&account, dec!("10512.684683767608857909"), dec!("9999.999999999957144202"));
 }
 
 /**
@@ -657,6 +659,45 @@ fn scenario_14() {
     context.add_position(&account, dec!("10000"), Decimal::zero(), 200, 300);
     context.swap_usdt_for_moj(&account, dec!("20000"), dec!("19647.863604192115415544"));
     context.swap_moj_for_usdt(&account, dec!("19647.863604192115415544"), dec!("19999.999999999994361019"));
+}
+
+/**
+ * Single range swap. Liquidity limit.
+ * 
+ * Given a pool with fee=0, sqrt_price=1 and a position=[10000 MOJ + 10000 USDT, -1000, 1000]
+ * 
+ * Test that if we try to swap 11000 MOJ, we can swap only ~10512 MOJ right to the end of the range(tick -1000), that the expected amount of USDT is returned (~10000 USDT) and the reminder ~ 488MOJ are returned back, as we have no more liquidity to swap it.
+ */
+#[test]
+fn scenario_15() {
+    let mut context = Context::new(Decimal::zero(), Decimal::one());
+    let account = context.new_account_with_moj_and_usdt(dec!("30000"), dec!("30000"));
+    context.add_position(&account, dec!("10000"), dec!("10000"), -1000, 1000);
+    let _swap1_receipt = context.swap_moj_for_usdt(&account, dec!("11000"), dec!("9999.999999999957144202"));
+}
+
+/**
+ * Collect fees.
+ * 
+ * Given:
+ * - pool with fee=0.01, sqrt_price=1
+ * - position1=[10000 MOJ, 10000 USDT, -1000, 1000]
+ * - position2=[10000 MOJ, 10000 USDT, -1000, 1000]
+ * 
+ * If: there is a 5000 MOJ swap in range [-1000, 1000]
+ * 
+ * Then: position 1 and position 2 split equally the 50 MOJ fee
+ */
+#[test]
+fn scenario_16() {
+    let mut context = Context::new(dec!("0.01"), Decimal::one());
+    let account1 = context.new_account_with_moj_and_usdt(dec!("100000"), dec!("100000"));
+    let account2 = context.new_account_with_moj_and_usdt(dec!("100000"), dec!("100000"));
+    context.add_position(&account1, dec!("10000"), dec!("10000"), -1000, 1000);
+    context.add_position(&account2, dec!("10000"), dec!("10000"), -1000, 1000);
+    context.swap_moj_for_usdt(&account1, dec!("5000"), dec!("4890.96541696510667305"));
+    context.collect_fees(&account1, dec!("24.999999999999999999"), Decimal::zero());
+    context.collect_fees(&account2, dec!("24.999999999999999999"), Decimal::zero());
 }
 
 // To be continued...
