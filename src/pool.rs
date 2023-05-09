@@ -22,7 +22,7 @@ mod pool_blueprint {
         used_ticks: BTreeSet<i32>,
         tick_states: HashMap<i32, TickState>,
         pos_nft_minter_badge: Vault,
-        owner_badge_addr: ResourceAddress,
+        admin_badge_addr: ResourceAddress,
     }
 
     impl Pool {
@@ -31,14 +31,14 @@ mod pool_blueprint {
          * - resource0_addr, resource1_addr = fungible tokens address.
          * - fee = pool fee, a percentage of the amount that is swapped, fee >= 0 and fee <= 1
          * - sqrt_price = square root of the price token0 vs token1 when the pool is created.
-         * - owner_badge_addr = a badge that allows the pool owner to execute operations on the pool (usually a pool should be owned by another component, e.g. a DEX component)
+         * - admin_badge_addr = a badge that allows the pool creator to destroy the pool if conditions are met
          */
         pub fn new(
             resource0_addr: ResourceAddress,
             resource1_addr: ResourceAddress,
             fee: Decimal,
             sqrt_price: Decimal,
-            owner_badge_addr: ResourceAddress,
+            admin_badge_addr: ResourceAddress,
         ) -> ComponentAddress {
             assert!(sqrt_price > Decimal::zero(), "Invalid sqrt price, should be positive.");
             assert!(
@@ -57,12 +57,7 @@ mod pool_blueprint {
                 .create_with_no_initial_supply();
 
             let auth: AccessRulesConfig = AccessRulesConfig::new()
-                .method("add_position", rule!(require(owner_badge_addr)), AccessRule::DenyAll)
-                .method("add_liq", rule!(require(owner_badge_addr)), AccessRule::DenyAll)
-                .method("add_accumulated_fees_to_liq", rule!(require(owner_badge_addr)), AccessRule::DenyAll)
-                .method("remove_pos", rule!(require(owner_badge_addr)), AccessRule::DenyAll)
-                .method("collect_fees", rule!(require(owner_badge_addr)), AccessRule::DenyAll)
-                .method("swap", rule!(require(owner_badge_addr)), AccessRule::DenyAll)
+                .method("destroy", rule!(require(admin_badge_addr)), AccessRule::DenyAll)
                 .default(AccessRule::AllowAll, AccessRule::DenyAll);
 
             let component = Self {
@@ -79,7 +74,7 @@ mod pool_blueprint {
                 used_ticks: BTreeSet::new(),
                 tick_states: HashMap::new(),
                 pos_nft_minter_badge: Vault::with_bucket(pos_nft_minter_badge),
-                owner_badge_addr,
+                admin_badge_addr,
             }
             .instantiate();
             component.globalize_with_access_rules(auth)
@@ -107,10 +102,7 @@ mod pool_blueprint {
             mut bucket1: Bucket,
             low_tick: i32,
             high_tick: i32,
-            owner_auth: Proof
         ) -> (Bucket, Bucket, Bucket) {
-            self.validate_owner_auth(owner_auth);
-
             debug!("### Adding a new position...");
             debug!("### Bucket0 resource={:?}", bucket0.resource_address());
             debug!("### Bucket0={:?}", bucket0.amount());
@@ -196,9 +188,7 @@ mod pool_blueprint {
          *
          * Returns the remainder of the amount0,1, if any.
          */
-        pub fn add_liq(&mut self, mut bucket0: Bucket, mut bucket1: Bucket, auth: Proof, owner_auth: Proof) -> (Bucket, Bucket) {
-            self.validate_owner_auth(owner_auth);
-
+        pub fn add_liq(&mut self, mut bucket0: Bucket, mut bucket1: Bucket, auth: Proof) -> (Bucket, Bucket) {
             debug!("### Adding liquidity...");
             //validate the resources sent in
             self.validate_resources(bucket0.resource_address(), bucket1.resource_address());
@@ -220,9 +210,7 @@ mod pool_blueprint {
         /**
          * Add the accumulated fees on the given position to the position liquidity.
          */
-        pub fn add_accumulated_fees_to_liq(&mut self, auth: Proof, owner_auth: Proof) {
-            self.validate_owner_auth(owner_auth);
-
+        pub fn add_accumulated_fees_to_liq(&mut self, auth: Proof) {
             debug!("### Adding collected fees to liquidity...");
             self.add_liq_internal(Decimal::zero(), Decimal::zero(), auth);
             debug!("### Accumulated fees added to liquidity.");
@@ -233,9 +221,7 @@ mod pool_blueprint {
          *
          * Return the amount0,1 corresponding to the liquidity removed. Amount0,1 contain also the fees already accumulated by the position.
          */
-        pub fn remove_pos(&mut self, auth: Proof, owner_auth: Proof) -> (Bucket, Bucket) {
-            self.validate_owner_auth(owner_auth);
-
+        pub fn remove_pos(&mut self, auth: Proof) -> (Bucket, Bucket) {
             let valid_auth: ValidatedProof = self.validate_auth(auth);
             let pos_nft: NonFungible<PositionNFTData> = valid_auth.non_fungible();
             self.remove_liq_internal(pos_nft.data().liq, valid_auth)
@@ -244,9 +230,7 @@ mod pool_blueprint {
         /**
          * Collect the fees accumulated for the position identified by the NFT in the auth
          */
-        pub fn collect_fees(&mut self, auth: Proof, owner_auth: Proof) -> (Bucket, Bucket) {
-            self.validate_owner_auth(owner_auth);
-
+        pub fn collect_fees(&mut self, auth: Proof) -> (Bucket, Bucket) {
             debug!("### Collecting fees...");
             self.remove_liq_internal(Decimal::zero(), self.validate_auth(auth))
         }
@@ -256,9 +240,7 @@ mod pool_blueprint {
          *
          * Returns the swapped amount1,0 and the remainder of the provided amount0,1
          */
-        pub fn swap(&mut self, bucket: Bucket, owner_auth: Proof) -> (Bucket, Bucket) {
-            self.validate_owner_auth(owner_auth);
-
+        pub fn swap(&mut self, bucket: Bucket) -> (Bucket, Bucket) {
             debug!("### Swapping...");
 
             //validate the resource to swap
@@ -281,11 +263,10 @@ mod pool_blueprint {
         }
 
         /**
-         * Validate the type and quantity of the provided owner proof match the type set up at the pool instantiation
+         * Destroy the pool if no more positions
          */
-        fn validate_owner_auth(&self, auth: Proof) -> ValidatedProof {
-            auth.validate_proof(ProofValidationMode::ValidateContainsAmount(self.owner_badge_addr, Decimal::one()))
-                .expect("The provided owner badge is either of an invalid resource address or amount.")
+        pub fn destroy(&self) {
+            //todo
         }
 
         /**
