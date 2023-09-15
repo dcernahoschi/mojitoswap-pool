@@ -39,25 +39,56 @@ mod pool_blueprint {
             fee: Decimal,
             sqrt_price: Decimal,
             admin_badge_addr: ResourceAddress,
-        ) -> ComponentAddress {
-            assert!(sqrt_price > Decimal::zero(), "Invalid sqrt price, should be positive.");
+            low_sqrt_price: Decimal,
+            high_sqrt_price: Decimal,
+            bucket0: Bucket,
+            bucket1: Bucket,
+        ) -> (ComponentAddress, Bucket, Bucket, Bucket) {
+            assert!(
+                sqrt_price > Decimal::zero(),
+                "Invalid sqrt price, should be positive."
+            );
+            assert!(
+                sqrt_price >= low_sqrt_price,
+                "Invalid low sqrt price, should be smaller or equal with sqrt price."
+            );
+            assert!(
+                sqrt_price < high_sqrt_price,
+                "Invalid high sqrt price, should be greater than sqrt price."
+            );
             assert!(
                 fee >= Decimal::zero() && fee <= Decimal::one(),
                 "Invalid fee, should be 0 <= fee <= 1"
             );
-            assert!(resource0_addr != resource1_addr, "Pool resources should be different.");
+            assert!(
+                resource0_addr != resource1_addr,
+                "Pool resources should be different."
+            );
             Pool::validate_resource_type_is_fungible(resource0_addr);
             Pool::validate_resource_type_is_fungible(resource1_addr);
 
             let pos_nft_minter_badge = ResourceBuilder::new_fungible().mint_initial_supply(1);
             let pos_nft_addr = ResourceBuilder::new_uuid_non_fungible::<PositionNFTData>()
-                .mintable(rule!(require(pos_nft_minter_badge.resource_address())), LOCKED)
-                .burnable(rule!(require(pos_nft_minter_badge.resource_address())), LOCKED)
-                .updateable_non_fungible_data(rule!(require(pos_nft_minter_badge.resource_address())), LOCKED)
+                .mintable(
+                    rule!(require(pos_nft_minter_badge.resource_address())),
+                    LOCKED,
+                )
+                .burnable(
+                    rule!(require(pos_nft_minter_badge.resource_address())),
+                    LOCKED,
+                )
+                .updateable_non_fungible_data(
+                    rule!(require(pos_nft_minter_badge.resource_address())),
+                    LOCKED,
+                )
                 .create_with_no_initial_supply();
 
             let auth: AccessRulesConfig = AccessRulesConfig::new()
-                .method("destroy", rule!(require(admin_badge_addr)), AccessRule::DenyAll)
+                .method(
+                    "destroy",
+                    rule!(require(admin_badge_addr)),
+                    AccessRule::DenyAll,
+                )
                 .default(AccessRule::AllowAll, AccessRule::DenyAll);
 
             let component = Self {
@@ -77,7 +108,20 @@ mod pool_blueprint {
                 admin_badge_addr,
             }
             .instantiate();
-            component.globalize_with_access_rules(auth)
+
+            let (pos_nft, remaining_bucket0, remaining_bucket1) = component.add_position(
+                bucket0,
+                bucket1,
+                low_sqrt_price,
+                high_sqrt_price,
+            );
+
+            (
+                component.globalize_with_access_rules(auth),
+                pos_nft,
+                remaining_bucket0,
+                remaining_bucket1,
+            )
         }
 
         /**
@@ -100,14 +144,20 @@ mod pool_blueprint {
             &mut self,
             mut bucket0: Bucket,
             mut bucket1: Bucket,
-            low_tick: i32,
-            high_tick: i32,
+            low_sqrt_price: Decimal,
+            high_sqrt_price: Decimal,
         ) -> (Bucket, Bucket, Bucket) {
+            
             debug!("### Adding a new position...");
             debug!("### Bucket0 resource={:?}", bucket0.resource_address());
             debug!("### Bucket0={:?}", bucket0.amount());
             debug!("### Bucket1 resource={:?}", bucket1.resource_address());
             debug!("### Bucket1={:?}", bucket1.amount());
+            debug!("### Low sqrt price={:?}", low_sqrt_price);
+            debug!("### High sqrt price={:?}", high_sqrt_price);
+
+            let low_tick = tick_math::tick_at_sqrt_price(low_sqrt_price);
+            let high_tick = tick_math::tick_at_sqrt_price(high_sqrt_price);
             debug!("### Low tick={:?}", low_tick);
             debug!("### High tick={:?}", high_tick);
 
@@ -122,33 +172,30 @@ mod pool_blueprint {
 
             self.log_state("### Internal state before adding the new position");
 
+            let low_sqrt_price = tick_math::sqrt_price_at_tick(low_tick);
+            let high_sqrt_price = tick_math::sqrt_price_at_tick(high_tick);
             //compute the liquidty and amount0,1 required for this liquidity, depending on the current tick
-            let (liq, required_amount0, required_amount1) = pool_math::compute_range_liq_given_amounts(
-                bucket0.amount(),
-                bucket1.amount(),
-                self.sqrt_price,
-                tick_math::sqrt_price_at_tick(low_tick),
-                tick_math::sqrt_price_at_tick(high_tick),
-            );
+            let (liq, required_amount0, required_amount1) =
+                pool_math::compute_range_liq_given_amounts(
+                    bucket0.amount(),
+                    bucket1.amount(),
+                    self.sqrt_price,
+                    low_sqrt_price,
+                    high_sqrt_price,
+                );
 
             //update live liq
             self.update_live_liq(liq, low_tick, high_tick);
 
             //update tick states
-            self.tick_states.entry(low_tick).or_insert(TickState::new(low_tick)).modify_liq(
-                liq,
-                false,
-                self.tick,
-                self.fee_global0,
-                self.fee_global1,
-            );
-            self.tick_states.entry(high_tick).or_insert(TickState::new(high_tick)).modify_liq(
-                liq,
-                true,
-                self.tick,
-                self.fee_global0,
-                self.fee_global1,
-            );
+            self.tick_states
+                .entry(low_tick)
+                .or_insert(TickState::new(low_tick))
+                .modify_liq(liq, false, self.tick, self.fee_global0, self.fee_global1);
+            self.tick_states
+                .entry(high_tick)
+                .or_insert(TickState::new(high_tick))
+                .modify_liq(liq, true, self.tick, self.fee_global0, self.fee_global1);
 
             //mark ticks as used
             self.used_ticks.insert(low_tick);
@@ -160,9 +207,13 @@ mod pool_blueprint {
 
             //mint the nft corresponding to the position with the liqudity on it
             let pos_res_mg: ResourceManager = borrow_resource_manager!(self.pos_nft_addr);
-            let pos_nft = self
-                .pos_nft_minter_badge
-                .authorize(|| pos_res_mg.mint_uuid_non_fungible(PositionNFTData { liq }));
+            let pos_nft = self.pos_nft_minter_badge.authorize(|| {
+                pos_res_mg.mint_uuid_non_fungible(PositionNFTData {
+                    liq,
+                    low_sqrt_price,
+                    high_sqrt_price,
+                })
+            });
 
             //save the new position
             self.positions.insert(
@@ -188,13 +239,19 @@ mod pool_blueprint {
          *
          * Returns the remainder of the amount0,1, if any.
          */
-        pub fn add_liq(&mut self, mut bucket0: Bucket, mut bucket1: Bucket, auth: Proof) -> (Bucket, Bucket) {
+        pub fn add_liq(
+            &mut self,
+            mut bucket0: Bucket,
+            mut bucket1: Bucket,
+            auth: Proof,
+        ) -> (Bucket, Bucket) {
             debug!("### Adding liquidity...");
             //validate the resources sent in
             self.validate_resources(bucket0.resource_address(), bucket1.resource_address());
 
             //add liq
-            let (to_deduct_amount0, to_deduct_amount1) = self.add_liq_internal(bucket0.amount(), bucket1.amount(), auth);
+            let (to_deduct_amount0, to_deduct_amount1) =
+                self.add_liq_internal(bucket0.amount(), bucket1.amount(), auth);
 
             // take the required amounts in the pool vaults
             self.vault0.put(bucket0.take(to_deduct_amount0));
@@ -251,11 +308,12 @@ mod pool_blueprint {
             );
 
             //depending on the resource type sent swap resource0 or resource1
-            let (output_bucket, remainder_bucket) = if bucket.resource_address() == self.vault0.resource_address() {
-                self.swap_internal(bucket, true)
-            } else {
-                self.swap_internal(bucket, false)
-            };
+            let (output_bucket, remainder_bucket) =
+                if bucket.resource_address() == self.vault0.resource_address() {
+                    self.swap_internal(bucket, true)
+                } else {
+                    self.swap_internal(bucket, false)
+                };
 
             debug!("Swapping done.");
 
@@ -273,8 +331,11 @@ mod pool_blueprint {
          * Validate the type and quantity of the provided proof match the type issued by the pool
          */
         fn validate_auth(&self, auth: Proof) -> ValidatedProof {
-            auth.validate_proof(ProofValidationMode::ValidateContainsAmount(self.pos_nft_addr, Decimal::one()))
-                .expect("The provided badge is either of an invalid resource address or amount.")
+            auth.validate_proof(ProofValidationMode::ValidateContainsAmount(
+                self.pos_nft_addr,
+                Decimal::one(),
+            ))
+            .expect("The provided badge is either of an invalid resource address or amount.")
         }
 
         /**
@@ -292,7 +353,8 @@ mod pool_blueprint {
          */
         fn validate_resources(&self, resource0: ResourceAddress, resource1: ResourceAddress) {
             assert!(
-                resource0 == self.vault0.resource_address() && resource1 == self.vault1.resource_address(),
+                resource0 == self.vault0.resource_address()
+                    && resource1 == self.vault1.resource_address(),
                 "Wrong resource types passed to the pool. Op aborted."
             );
         }
@@ -300,7 +362,12 @@ mod pool_blueprint {
         /**
          * Adds the given amount0,1 to the liquidty of the given position, together with the fees accumulated by the given position
          */
-        fn add_liq_internal(&mut self, amount0: Decimal, amount1: Decimal, auth: Proof) -> (Decimal, Decimal) {
+        fn add_liq_internal(
+            &mut self,
+            amount0: Decimal,
+            amount1: Decimal,
+            auth: Proof,
+        ) -> (Decimal, Decimal) {
             debug!("### Adding liquidity internally...");
             debug!("### Amount0={:?}", amount0);
             debug!("### Amount1={:?}", amount1);
@@ -327,7 +394,13 @@ mod pool_blueprint {
                 self.tick_states.get(&low_tick).unwrap(),
                 self.tick_states.get(&high_tick).unwrap(),
             );
-            let (pos_fee0, pos_fee1) = pool_math::compute_pos_fees(pos.liq, pos.range_fee0, pos.range_fee1, range_fee0, range_fee1);
+            let (pos_fee0, pos_fee1) = pool_math::compute_pos_fees(
+                pos.liq,
+                pos.range_fee0,
+                pos.range_fee1,
+                range_fee0,
+                range_fee1,
+            );
 
             debug!("### Range_fee0={:?}", range_fee0);
             debug!("### Range_fee1={:?}", range_fee1);
@@ -335,13 +408,14 @@ mod pool_blueprint {
             debug!("### Pos_fee1={:?}", pos_fee1);
 
             // compute the new position liquidity and the required amount0,1, including also the fees in the liquidity
-            let (liq, required_amount0, required_amount1) = pool_math::compute_range_liq_given_amounts(
-                amount0 + pos_fee0,
-                amount1 + pos_fee1,
-                self.sqrt_price,
-                tick_math::sqrt_price_at_tick(low_tick),
-                tick_math::sqrt_price_at_tick(high_tick),
-            );
+            let (liq, required_amount0, required_amount1) =
+                pool_math::compute_range_liq_given_amounts(
+                    amount0 + pos_fee0,
+                    amount1 + pos_fee1,
+                    self.sqrt_price,
+                    tick_math::sqrt_price_at_tick(low_tick),
+                    tick_math::sqrt_price_at_tick(high_tick),
+                );
 
             debug!("### Liq={:?}", liq);
             debug!("### Required_amount0={:?}", required_amount0);
@@ -394,7 +468,11 @@ mod pool_blueprint {
         /**
          * Removes the given liquidity from the position and returns de corresponding amount0,1 and the position uncollected fees
          */
-        fn remove_liq_internal(&mut self, liq: Decimal, valid_auth: ValidatedProof) -> (Bucket, Bucket) {
+        fn remove_liq_internal(
+            &mut self,
+            liq: Decimal,
+            valid_auth: ValidatedProof,
+        ) -> (Bucket, Bucket) {
             debug!("### Removing liq internal...");
 
             debug!("### Liq={:?}", liq);
@@ -431,7 +509,13 @@ mod pool_blueprint {
                 self.tick_states.get(&low_tick).unwrap(),
                 self.tick_states.get(&high_tick).unwrap(),
             );
-            let (pos_fee0, pos_fee1) = pool_math::compute_pos_fees(pos.liq, pos.range_fee0, pos.range_fee1, range_fee0, range_fee1);
+            let (pos_fee0, pos_fee1) = pool_math::compute_pos_fees(
+                pos.liq,
+                pos.range_fee0,
+                pos.range_fee1,
+                range_fee0,
+                range_fee1,
+            );
 
             debug!("### Range_fee0={:?}", range_fee0);
             debug!("### Range_fee1={:?}", range_fee1);
@@ -494,14 +578,22 @@ mod pool_blueprint {
             let pos_nft: NonFungible<PositionNFTData> = auth.non_fungible();
             let pos_nft_data = auth.non_fungible::<PositionNFTData>().data();
             let new_liq = pos_nft_data.liq + liq;
-            assert!(new_liq >= Decimal::zero(), "Position NFT liq should be positive, op aborted.");
-            self.pos_nft_minter_badge
-                .authorize(|| borrow_resource_manager!(self.pos_nft_addr).update_non_fungible_data(
+            assert!(
+                new_liq >= Decimal::zero(),
+                "Position NFT liq should be positive, op aborted."
+            );
+            self.pos_nft_minter_badge.authorize(|| {
+                borrow_resource_manager!(self.pos_nft_addr).update_non_fungible_data(
                     &pos_nft.local_id(),
                     "liq",
-                    new_liq
-                  ));
-            debug!("### Liqudity for pos NFT with id {:?} updated to {:?}", pos_nft.local_id(), new_liq);
+                    new_liq,
+                )
+            });
+            debug!(
+                "### Liqudity for pos NFT with id {:?} updated to {:?}",
+                pos_nft.local_id(),
+                new_liq
+            );
         }
 
         /**
@@ -530,10 +622,26 @@ mod pool_blueprint {
         fn update_ticks_liq(&mut self, liq: Decimal, low_tick: i32, high_tick: i32) {
             self.tick_states
                 .entry(low_tick)
-                .and_modify(|low_tick_state| low_tick_state.modify_liq(liq, false, self.tick, self.fee_global0, self.fee_global1));
+                .and_modify(|low_tick_state| {
+                    low_tick_state.modify_liq(
+                        liq,
+                        false,
+                        self.tick,
+                        self.fee_global0,
+                        self.fee_global1,
+                    )
+                });
             self.tick_states
                 .entry(high_tick)
-                .and_modify(|high_tick_state| high_tick_state.modify_liq(liq, true, self.tick, self.fee_global0, self.fee_global1));
+                .and_modify(|high_tick_state| {
+                    high_tick_state.modify_liq(
+                        liq,
+                        true,
+                        self.tick,
+                        self.fee_global0,
+                        self.fee_global1,
+                    )
+                });
         }
 
         /**
@@ -588,15 +696,29 @@ mod pool_blueprint {
                 if let Some(tick_to_cross) = opt_tick_to_cross {
                     let sqrt_price_at_tick_to_cross = tick_math::sqrt_price_at_tick(*tick_to_cross);
 
-                    debug!("### Sqrt_price_at_tick_to_cross={:?}", sqrt_price_at_tick_to_cross);
+                    debug!(
+                        "### Sqrt_price_at_tick_to_cross={:?}",
+                        sqrt_price_at_tick_to_cross
+                    );
 
                     // compute the amount needed to cross tick
                     let needed_amount_to_cross_tick = if is_token0 {
-                        pool_math::compute_range_amount0_given_liq(self.live_liq, sqrt_price_at_tick_to_cross, self.sqrt_price)
+                        pool_math::compute_range_amount0_given_liq(
+                            self.live_liq,
+                            sqrt_price_at_tick_to_cross,
+                            self.sqrt_price,
+                        )
                     } else {
-                        pool_math::compute_range_amount1_given_liq(self.live_liq, self.sqrt_price, sqrt_price_at_tick_to_cross)
+                        pool_math::compute_range_amount1_given_liq(
+                            self.live_liq,
+                            self.sqrt_price,
+                            sqrt_price_at_tick_to_cross,
+                        )
                     };
-                    debug!("### Needed_amount_to_cross_tick={:?}", needed_amount_to_cross_tick);
+                    debug!(
+                        "### Needed_amount_to_cross_tick={:?}",
+                        needed_amount_to_cross_tick
+                    );
 
                     let is_tick_cross_needed = needed_amount_to_cross_tick < available_amount;
                     debug!("### Is_tick_cross_needed={:?}", is_tick_cross_needed);
@@ -607,7 +729,10 @@ mod pool_blueprint {
                     } else {
                         available_amount
                     };
-                    debug!("### Before substracting fee, amount_to_swap={:?}", amount_to_swap);
+                    debug!(
+                        "### Before substracting fee, amount_to_swap={:?}",
+                        amount_to_swap
+                    );
 
                     // compute fee
                     let fee_amount = amount_to_swap * self.fee;
@@ -615,13 +740,24 @@ mod pool_blueprint {
 
                     // don't swap the fees
                     amount_to_swap -= fee_amount;
-                    debug!("### After substracting fee, amount_to_swap={:?}", amount_to_swap);
+                    debug!(
+                        "### After substracting fee, amount_to_swap={:?}",
+                        amount_to_swap
+                    );
 
                     // compute the new sqrt price and the amount we get by swapping the provided amount
                     let (new_sqrt_price, swapped_amount) = if is_token0 {
-                        pool_math::compute_swap_amount0_price_and_amount1(self.live_liq, self.sqrt_price, amount_to_swap)
+                        pool_math::compute_swap_amount0_price_and_amount1(
+                            self.live_liq,
+                            self.sqrt_price,
+                            amount_to_swap,
+                        )
                     } else {
-                        pool_math::compute_swap_amount1_price_and_amount0(self.live_liq, self.sqrt_price, amount_to_swap)
+                        pool_math::compute_swap_amount1_price_and_amount0(
+                            self.live_liq,
+                            self.sqrt_price,
+                            amount_to_swap,
+                        )
                     };
                     debug!("### New_sqrt_price={:?}", new_sqrt_price);
                     debug!("### Swapped_amount={:?}", swapped_amount);
@@ -631,7 +767,7 @@ mod pool_blueprint {
                     total_swapped_amount += swapped_amount;
                     total_fee_amount += fee_amount;
                     self.sqrt_price = new_sqrt_price;
-                    
+
                     // update global fees
                     let liq_unit_fee = fee_amount / self.live_liq;
                     if is_token0 {
@@ -644,7 +780,7 @@ mod pool_blueprint {
                     if is_tick_cross_needed {
                         self.cross_tick(*tick_to_cross);
                     } else {
-                        self.tick = tick_math::tick_at_sqrt_price(new_sqrt_price);
+                        //self.tick = tick_math::tick_at_sqrt_price(new_sqrt_price);
                     }
 
                     self.log_state("### Internal state after swap step");
@@ -672,7 +808,11 @@ mod pool_blueprint {
             debug!("### Remainder_bucket={:?}", bucket.amount());
 
             self.log_state("### Internal state after swap.");
-            debug!("### Swapping {:?} of {:?} done.", initial_bucket_amount, bucket.resource_address());
+            debug!(
+                "### Swapping {:?} of {:?} done.",
+                initial_bucket_amount,
+                bucket.resource_address()
+            );
 
             (swapped_bucket, bucket)
         }
@@ -694,7 +834,11 @@ mod pool_blueprint {
 
             // update the new current tick fees and the pool live liq
             self.tick_states.entry(self.tick).and_modify(|state| {
-                self.live_liq = if cross_up { self.live_liq + state.liq_net } else { self.live_liq - state.liq_net };
+                self.live_liq = if cross_up {
+                    self.live_liq + state.liq_net
+                } else {
+                    self.live_liq - state.liq_net
+                };
                 state.cross_tick(self.fee_global0, self.fee_global1)
             });
         }
@@ -752,7 +896,14 @@ impl TickState {
      * Also if the tick was just created update the fee generated ourtside of it. By convention, on init,
      * all fees were generated outside of the tick.
      */
-    pub fn modify_liq(&mut self, liq: Decimal, is_high_tick: bool, current_tick: i32, fee_global0: Decimal, fee_global1: Decimal) {
+    pub fn modify_liq(
+        &mut self,
+        liq: Decimal,
+        is_high_tick: bool,
+        current_tick: i32,
+        fee_global0: Decimal,
+        fee_global1: Decimal,
+    ) {
         if !self.init {
             if self.tick <= current_tick {
                 self.fee_outside0 = fee_global0;
@@ -786,7 +937,13 @@ struct Position {
 }
 
 impl Position {
-    pub fn new(liq: Decimal, low_tick: i32, high_tick: i32, range_fee0: Decimal, range_fee1: Decimal) -> Position {
+    pub fn new(
+        liq: Decimal,
+        low_tick: i32,
+        high_tick: i32,
+        range_fee0: Decimal,
+        range_fee1: Decimal,
+    ) -> Position {
         Self {
             liq,
             low_tick,
@@ -810,4 +967,6 @@ impl Position {
 pub struct PositionNFTData {
     #[mutable]
     pub liq: Decimal,
+    pub low_sqrt_price: Decimal,
+    pub high_sqrt_price: Decimal,
 }
