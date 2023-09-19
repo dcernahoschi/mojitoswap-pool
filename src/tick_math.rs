@@ -7,49 +7,49 @@ const MIN_TICK: i32 = -631042;
 const MAX_TICK: i32 = 931709;
 
 //0.00000000000001985
-const MIN_PRICE: Decimal = Decimal(BnumI256::from_digits([19850, 0, 0, 0]));
+const MIN_PRICE: Decimal = Decimal(bnum_integer::I192::from_digits([19850, 0, 0]));
 //1.000049998750062496 = √1.0001^(2^0)
-const PRICE_0X1: Decimal = Decimal(BnumI256::from_digits([1000049998750062496, 0, 0, 0]));
+const PRICE_0X1: Decimal = Decimal(bnum_integer::I192::from_digits([1000049998750062496, 0, 0]));
 //1.0001 = √1.0001^(2^1)
-const PRICE_0X2: Decimal = Decimal(BnumI256::from_digits([1000100000000000000, 0, 0, 0]));
+const PRICE_0X2: Decimal = Decimal(bnum_integer::I192::from_digits([1000100000000000000, 0, 0]));
 //1.00020001 = √1.0001^(2^2)
-const PRICE_0X4: Decimal = Decimal(BnumI256::from_digits([1000200010000000000, 0, 0, 0]));
+const PRICE_0X4: Decimal = Decimal(bnum_integer::I192::from_digits([1000200010000000000, 0, 0]));
 //1.000400060004000093 = √1.0001^(2^3)
-const PRICE_0X8: Decimal = Decimal(BnumI256::from_digits([1000400060004000093, 0, 0, 0]));
+const PRICE_0X8: Decimal = Decimal(bnum_integer::I192::from_digits([1000400060004000093, 0, 0]));
 //1.000800280056006986 = √1.0001^(2^4)
-const PRICE_0X10: Decimal = Decimal(BnumI256::from_digits([1000800280056006986, 0, 0, 0]));
+const PRICE_0X10: Decimal = Decimal(bnum_integer::I192::from_digits([1000800280056006986, 0, 0]));
 //1.001601200560182014 = √1.0001^(2^5)
-const PRICE_0X20: Decimal = Decimal(BnumI256::from_digits([1001601200560182014, 0, 0, 0]));
+const PRICE_0X20: Decimal = Decimal(bnum_integer::I192::from_digits([1001601200560182014, 0, 0]));
 //1.003204964963597955 = √1.0001^(2^6)
-const PRICE_0X40: Decimal = Decimal(BnumI256::from_digits([1003204964963597955, 0, 0, 0]));
+const PRICE_0X40: Decimal = Decimal(bnum_integer::I192::from_digits([1003204964963597955, 0, 0]));
 //1.006420201727613800 = √1.0001^(2^7)
-const PRICE_0X80: Decimal = Decimal(BnumI256::from_digits([1006420201727613800, 0, 0, 0]));
+const PRICE_0X80: Decimal = Decimal(bnum_integer::I192::from_digits([1006420201727613800, 0, 0]));
 //1.012881622445450855 = √1.0001^(2^8)
-const PRICE_0X100: Decimal = Decimal(BnumI256::from_digits([1012881622445450855, 0, 0, 0]));
+const PRICE_0X100: Decimal = Decimal(bnum_integer::I192::from_digits([1012881622445450855, 0, 0]));
 //1.025929181087728853 = √1.0001^(2^9)
-const PRICE_0X200: Decimal = Decimal(BnumI256::from_digits([1025929181087728853, 0, 0, 0]));
+const PRICE_0X200: Decimal = Decimal(bnum_integer::I192::from_digits([1025929181087728853, 0, 0]));
 //1.052530684607337941 = √1.0001^(2^10)
-const PRICE_0X400: Decimal = Decimal(BnumI256::from_digits([1052530684607337941, 0, 0, 0]));
+const PRICE_0X400: Decimal = Decimal(bnum_integer::I192::from_digits([1052530684607337941, 0, 0]));
 //1.107820842039991493 = √1.0001^(2^11)
-const PRICE_0X800: Decimal = Decimal(BnumI256::from_digits([1107820842039991493, 0, 0, 0]));
+const PRICE_0X800: Decimal = Decimal(bnum_integer::I192::from_digits([1107820842039991493, 0, 0]));
 //1.227267018058195782 = √1.0001^(2^12)
-const PRICE_0X1000: Decimal = Decimal(BnumI256::from_digits([1227267018058195782, 0, 0, 0]));
+const PRICE_0X1000: Decimal = Decimal(bnum_integer::I192::from_digits([1227267018058195782, 0, 0]));
 //1.506184333613455851 = √1.0001^(2^13)
-const PRICE_0X2000: Decimal = Decimal(BnumI256::from_digits([1506184333613455851, 0, 0, 0]));
+const PRICE_0X2000: Decimal = Decimal(bnum_integer::I192::from_digits([1506184333613455851, 0, 0]));
 //2.268591246822610072 = √1.0001^(2^14)
-const PRICE_0X4000: Decimal = Decimal(BnumI256::from_digits([2268591246822610072, 0, 0, 0]));
+const PRICE_0X4000: Decimal = Decimal(bnum_integer::I192::from_digits([2268591246822610072, 0, 0]));
 //5.146506245160164533 = √1.0001^(2^15)
-const PRICE_0X8000: Decimal = Decimal(BnumI256::from_digits([5146506245160164533, 0, 0, 0]));
+const PRICE_0X8000: Decimal = Decimal(bnum_integer::I192::from_digits([5146506245160164533, 0, 0]));
 //26.486526531472575563 = √1.0001^(2^16)
-const PRICE_0X10000: Decimal = Decimal(BnumI256::from_digits([8039782457763023947, 1, 0, 0]));
+const PRICE_0X10000: Decimal = Decimal(bnum_integer::I192::from_digits([8039782457763023947, 1, 0]));
 //701.536087702400664335 = √1.0001^(2^17)
-const PRICE_0X20000: Decimal = Decimal(BnumI256::from_digits([559812901437702927, 38, 0, 0]));
+const PRICE_0X20000: Decimal = Decimal(bnum_integer::I192::from_digits([559812901437702927, 38, 0]));
 //492152.882348790396620919 = √1.0001^(2^18)
-const PRICE_0X40000: Decimal = Decimal(BnumI256::from_digits([12197206293269057655, 26679, 0, 0]));
+const PRICE_0X40000: Decimal = Decimal(bnum_integer::I192::from_digits([12197206293269057655, 26679, 0]));
 //242214459604.222321943471435452 = √1.0001^(2^19)
-const PRICE_0X80000: Decimal = Decimal(BnumI256::from_digits([9500346154952666812, 13130472165, 0, 0]));
+const PRICE_0X80000: Decimal = Decimal(bnum_integer::I192::from_digits([9500346154952666812, 13130472165, 0]));
 //170134484377190040957.155711420855095752
-const MAX_PRICE: Decimal = Decimal(BnumI256::from_digits([4809668506064654792, 9223008878822527810, 0, 0]));
+const MAX_PRICE: Decimal = Decimal(bnum_integer::I192::from_digits([4809668506064654792, 9223008878822527810, 0]));
 
 /** 
  * By definition, sqrt_price = sqrt(1.0001) ^ tick, but tick is always a sum of powers of 2, e.g. 7 = 2^0 + 2^1 + 2^2,
@@ -278,13 +278,13 @@ mod tests {
 
     #[test]
     fn test_x() {
-        let a = BnumI256::from_str("170134484377190040957155711420855095752").unwrap();
+        let a = bnum_integer::I192::from_str("170134484377190040957155711420855095752").unwrap();
 
         println!("{:?}", a.0.to_bits().digits());
         
         let x = Decimal(a);
         let y = dec!("170134484377190040957.155711420855095752");
-        let z = Decimal(BnumI256::from_digits([4809668506064654792, 9223008878822527810, 0, 0]));
+        let z = Decimal(bnum_integer::I192::from_digits([4809668506064654792, 9223008878822527810, 0]));
         assert_eq!(x, y);
         assert_eq!(y, z);
     }
