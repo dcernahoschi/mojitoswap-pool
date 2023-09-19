@@ -8,6 +8,21 @@ use crate::tick_math;
 #[blueprint]
 mod pool_blueprint {
 
+    enable_method_auth! {
+        roles {
+            admin => updatable_by: [];
+        },
+        methods {
+            add_pos => PUBLIC;
+            remove_pos => PUBLIC;
+            add_liq => PUBLIC;
+            add_accumulated_fees_to_liq => PUBLIC;
+            collect_fees => PUBLIC;
+            swap => PUBLIC;
+            destroy => restrict_to: [admin];
+        }
+    }
+
     struct Pool {
         vault0: Vault,
         vault1: Vault,
@@ -17,7 +32,7 @@ mod pool_blueprint {
         fee: Decimal,
         fee_global0: Decimal,
         fee_global1: Decimal,
-        pos_nft_addr: ResourceAddress,
+        pos_nft_addr_resource_manager: ResourceManager,
         positions: HashMap<NonFungibleLocalId, Position>,
         used_ticks: BTreeSet<i32>,
         tick_states: HashMap<i32, TickState>,
@@ -43,7 +58,7 @@ mod pool_blueprint {
             high_sqrt_price: Decimal,
             bucket0: Bucket,
             bucket1: Bucket,
-        ) -> (ComponentAddress, Bucket, Bucket, Bucket) {
+        ) -> (Global<Pool>, Bucket, Bucket, Bucket) {
             assert!(
                 sqrt_price > Decimal::zero(),
                 "Invalid sqrt price, should be positive."
@@ -67,29 +82,24 @@ mod pool_blueprint {
             Pool::validate_resource_type_is_fungible(resource0_addr);
             Pool::validate_resource_type_is_fungible(resource1_addr);
 
-            let pos_nft_minter_badge = ResourceBuilder::new_fungible().mint_initial_supply(1);
-            let pos_nft_addr = ResourceBuilder::new_uuid_non_fungible::<PositionNFTData>()
-                .mintable(
-                    rule!(require(pos_nft_minter_badge.resource_address())),
-                    LOCKED,
-                )
-                .burnable(
-                    rule!(require(pos_nft_minter_badge.resource_address())),
-                    LOCKED,
-                )
-                .updateable_non_fungible_data(
-                    rule!(require(pos_nft_minter_badge.resource_address())),
-                    LOCKED,
-                )
+            let pos_nft_minter_badge: Bucket = ResourceBuilder::new_fungible(OwnerRole::None)
+                .divisibility(DIVISIBILITY_NONE)
+                .mint_initial_supply(1)
+                .into();
+            let pos_nft_addr_resource_manager = ResourceBuilder::new_ruid_non_fungible::<PositionNFTData>(OwnerRole::None)
+                .mint_roles(mint_roles! {
+                    minter => rule!(require(pos_nft_minter_badge.resource_address()));
+                    minter_updater => rule!(deny_all);
+                })
+                .burn_roles(burn_roles! {
+                    burner => rule!(deny_all);
+                    burner_updater => rule!(deny_all);
+                })
+                .non_fungible_data_update_roles(non_fungible_data_update_roles! {
+                    non_fungible_data_updater => rule!(require(pos_nft_minter_badge.resource_address()));
+                    non_fungible_data_updater_updater => rule!(deny_all);
+                })
                 .create_with_no_initial_supply();
-
-            let auth: AccessRulesConfig = AccessRulesConfig::new()
-                .method(
-                    "destroy",
-                    rule!(require(admin_badge_addr)),
-                    AccessRule::DenyAll,
-                )
-                .default(AccessRule::AllowAll, AccessRule::DenyAll);
 
             let component = Self {
                 vault0: Vault::new(resource0_addr),
@@ -100,35 +110,31 @@ mod pool_blueprint {
                 fee,
                 fee_global0: Decimal::zero(),
                 fee_global1: Decimal::zero(),
-                pos_nft_addr,
+                pos_nft_addr_resource_manager,
                 positions: HashMap::new(),
                 used_ticks: BTreeSet::new(),
                 tick_states: HashMap::new(),
                 pos_nft_minter_badge: Vault::with_bucket(pos_nft_minter_badge),
                 admin_badge_addr,
             }
-            .instantiate();
+            .instantiate()
+            .prepare_to_globalize(OwnerRole::None)
+            .roles(roles!(
+                admin => rule!(require(admin_badge_addr));
+            ))
+            .globalize();
 
-            let (pos_nft, remaining_bucket0, remaining_bucket1) = component.add_position(
-                bucket0,
-                bucket1,
-                low_sqrt_price,
-                high_sqrt_price,
-            );
+            let (pos_nft, remaining_bucket0, remaining_bucket1) =
+                component.add_pos(bucket0, bucket1, low_sqrt_price, high_sqrt_price);
 
-            (
-                component.globalize_with_access_rules(auth),
-                pos_nft,
-                remaining_bucket0,
-                remaining_bucket1,
-            )
+            (component, pos_nft, remaining_bucket0, remaining_bucket1)
         }
 
         /**
          * Validates that the pool resource types are fungibles.
          */
         fn validate_resource_type_is_fungible(resource_addr: ResourceAddress) {
-            let token_resource_type = borrow_resource_manager!(resource_addr).resource_type();
+            let token_resource_type = ResourceManager::from(resource_addr).resource_type();
             assert!(
                 matches!(token_resource_type, ResourceType::Fungible { .. }),
                 "Pool resource0,1 must be of fungible type."
@@ -140,14 +146,13 @@ mod pool_blueprint {
          *
          * Returns a NFT representing the position with the newly created liquidity and the remainders amount0,1.
          */
-        pub fn add_position(
+        pub fn add_pos(
             &mut self,
             mut bucket0: Bucket,
             mut bucket1: Bucket,
             low_sqrt_price: Decimal,
             high_sqrt_price: Decimal,
         ) -> (Bucket, Bucket, Bucket) {
-            
             debug!("### Adding a new position...");
             debug!("### Bucket0 resource={:?}", bucket0.resource_address());
             debug!("### Bucket0={:?}", bucket0.amount());
@@ -206,24 +211,30 @@ mod pool_blueprint {
             self.vault1.put(bucket1.take(required_amount1));
 
             //mint the nft corresponding to the position with the liqudity on it
-            let pos_res_mg: ResourceManager = borrow_resource_manager!(self.pos_nft_addr);
-            let pos_nft = self.pos_nft_minter_badge.authorize(|| {
-                pos_res_mg.mint_uuid_non_fungible(PositionNFTData {
-                    liq,
-                    low_sqrt_price,
-                    high_sqrt_price,
-                })
-            });
+            let pos_nft = self
+                .pos_nft_minter_badge
+                .as_fungible()
+                .authorize_with_amount(1, || {
+                    self.pos_nft_addr_resource_manager
+                        .mint_ruid_non_fungible(PositionNFTData {
+                            liq,
+                            low_sqrt_price,
+                            high_sqrt_price,
+                        })
+                });
 
             //save the new position
             self.positions.insert(
-                (pos_nft.non_fungible_local_id()).clone(),
+                (pos_nft.as_non_fungible().non_fungible_local_id()).clone(),
                 Position::new(liq, low_tick, high_tick, Decimal::zero(), Decimal::zero()),
             );
 
             self.log_state("### Internal state after adding the new position");
 
-            debug!("### Position id={:?}", pos_nft.non_fungible_local_id());
+            debug!(
+                "### Position id={:?}",
+                pos_nft.as_non_fungible().non_fungible_local_id()
+            );
             debug!("### Position NFT liq={:?}", liq);
             debug!("### Bucket0={:?}", bucket0.amount());
             debug!("### Bucket1={:?}", bucket1.amount());
@@ -278,10 +289,11 @@ mod pool_blueprint {
          *
          * Return the amount0,1 corresponding to the liquidity removed. Amount0,1 contain also the fees already accumulated by the position.
          */
-        pub fn remove_pos(&mut self, auth: Proof) -> (Bucket, Bucket) {
-            let valid_auth: ValidatedProof = self.validate_auth(auth);
-            let pos_nft: NonFungible<PositionNFTData> = valid_auth.non_fungible();
-            self.remove_liq_internal(pos_nft.data().liq, valid_auth)
+        pub fn remove_pos(&mut self, proof: Proof) -> (Bucket, Bucket) {
+            let checked_proof = self.check_proof(proof);
+            let pos_nft: NonFungible<PositionNFTData> =
+                checked_proof.as_non_fungible().non_fungible();
+            self.remove_liq_internal(pos_nft.data().liq, checked_proof)
         }
 
         /**
@@ -289,7 +301,7 @@ mod pool_blueprint {
          */
         pub fn collect_fees(&mut self, auth: Proof) -> (Bucket, Bucket) {
             debug!("### Collecting fees...");
-            self.remove_liq_internal(Decimal::zero(), self.validate_auth(auth))
+            self.remove_liq_internal(Decimal::zero(), self.check_proof(auth))
         }
 
         /**
@@ -330,12 +342,8 @@ mod pool_blueprint {
         /**
          * Validate the type and quantity of the provided proof match the type issued by the pool
          */
-        fn validate_auth(&self, auth: Proof) -> ValidatedProof {
-            auth.validate_proof(ProofValidationMode::ValidateContainsAmount(
-                self.pos_nft_addr,
-                Decimal::one(),
-            ))
-            .expect("The provided badge is either of an invalid resource address or amount.")
+        fn check_proof(&self, proof: Proof) -> CheckedProof {
+            proof.check(self.pos_nft_addr_resource_manager.address())
         }
 
         /**
@@ -366,18 +374,18 @@ mod pool_blueprint {
             &mut self,
             amount0: Decimal,
             amount1: Decimal,
-            auth: Proof,
+            proof: Proof,
         ) -> (Decimal, Decimal) {
             debug!("### Adding liquidity internally...");
             debug!("### Amount0={:?}", amount0);
             debug!("### Amount1={:?}", amount1);
 
-            let valid_auth: ValidatedProof = self.validate_auth(auth);
+            let checked_proof = self.check_proof(proof);
 
             self.log_state("### Internal state before adding the liquidity");
 
             //identify position and validate it
-            let pos: NonFungible<PositionNFTData> = valid_auth.non_fungible();
+            let pos: NonFungible<PositionNFTData> = checked_proof.as_non_fungible().non_fungible();
             let pos_id = pos.local_id();
             self.validate_pos(pos_id);
 
@@ -442,7 +450,7 @@ mod pool_blueprint {
             // update pool liquidity
             self.update_ticks_liq(liq, low_tick, high_tick);
             self.update_live_liq(liq, low_tick, high_tick);
-            self.update_pos_nft_liq(valid_auth, liq);
+            self.update_pos_nft_liq(checked_proof, liq);
 
             //compute how much we will deduct from the provided amount0,1
             let to_deduct_amount0 = if required_amount0 > pos_fee0 {
@@ -471,7 +479,7 @@ mod pool_blueprint {
         fn remove_liq_internal(
             &mut self,
             liq: Decimal,
-            valid_auth: ValidatedProof,
+            checked_proof: CheckedProof,
         ) -> (Bucket, Bucket) {
             debug!("### Removing liq internal...");
 
@@ -485,14 +493,15 @@ mod pool_blueprint {
             self.log_state("### Internal state before removing the liquidity");
 
             //identify the position
-            let pos_nft: NonFungible<PositionNFTData> = valid_auth.non_fungible();
+            let pos_nft: NonFungible<PositionNFTData> =
+                checked_proof.as_non_fungible().non_fungible();
             let pos_id = pos_nft.local_id();
             self.validate_pos(pos_id);
 
             debug!("### Pos_id={:?}", pos_id);
 
             //update the liquidity on the position NFT
-            self.update_pos_nft_liq(valid_auth, -liq);
+            self.update_pos_nft_liq(checked_proof, -liq);
 
             let pos = self.positions.get_mut(&pos_id).unwrap();
             let (low_tick, high_tick) = (pos.low_tick, pos.high_tick);
@@ -574,21 +583,25 @@ mod pool_blueprint {
         /**
          * Updates the liquidity on the position NFT coming with the proof.
          */
-        fn update_pos_nft_liq(&self, auth: ValidatedProof, liq: Decimal) {
-            let pos_nft: NonFungible<PositionNFTData> = auth.non_fungible();
-            let pos_nft_data = auth.non_fungible::<PositionNFTData>().data();
+        fn update_pos_nft_liq(&self, auth: CheckedProof, liq: Decimal) {
+            let pos_nft: NonFungible<PositionNFTData> = auth.as_non_fungible().non_fungible();
+            let pos_nft_data = pos_nft.data();
             let new_liq = pos_nft_data.liq + liq;
             assert!(
                 new_liq >= Decimal::zero(),
                 "Position NFT liq should be positive, op aborted."
             );
-            self.pos_nft_minter_badge.authorize(|| {
-                borrow_resource_manager!(self.pos_nft_addr).update_non_fungible_data(
-                    &pos_nft.local_id(),
-                    "liq",
-                    new_liq,
-                )
-            });
+
+            self.pos_nft_minter_badge
+                .as_fungible()
+                .authorize_with_amount(1, || {
+                    self.pos_nft_addr_resource_manager.update_non_fungible_data(
+                        &pos_nft.local_id(),
+                        "liq",
+                        new_liq,
+                    )
+                });
+
             debug!(
                 "### Liqudity for pos NFT with id {:?} updated to {:?}",
                 pos_nft.local_id(),
